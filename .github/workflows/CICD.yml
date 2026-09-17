@@ -1,11 +1,12 @@
 name: CI/CD
 
 on:
-  pull_request:
+  push:
     branches:
       - main
 
 ###
+      
 env:
   Location_path: /var/www/html/todo-frontend
   Temp_path: /tmp/todo-frentend
