@@ -5,6 +5,10 @@ on:
     branches:
       - main
 
+env:
+  Location_path: /var/www/html/todo-frontend
+  Temp_path: /tmp/todo-frentend
+
 jobs:
   frontend:
     name: Frontend CI
@@ -48,16 +52,17 @@ jobs:
           path: out
 
       - name: Upload static export
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "out/*"
-          target: "/tmp/todo-frontend-${{ github.sha }}"
-          strip_components: 1
-          timeout: 120s
-          command_timeout: 10m
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -e
+          echo "$EC2_SSH_KEY" > key.pem
+          chmod 600 key.pem
+          scp -o StrictHostKeyChecking=no -i key.pem -r out/* \
+            "$EC2_USER@$EC2_HOST:${Temp_path}}"
+          rm -f key.pem
 
       - name: Activate deployment
         uses: appleboy/ssh-action@v1
@@ -69,9 +74,8 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
-            sudo mkdir -p /var/www/html/todo-frontend
-            sudo find /var/www/html/todo-frontend -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-            sudo cp -R /tmp/todo-frontend-${{ github.sha }}/. /var/www/html/todo-frontend/
-            sudo chown -R www-data:www-data /var/www/html/todo-frontend
-            sudo rm -rf /tmp/todo-frontend-${{ github.sha }}
+            sudo rm -rf ${{env.Location_path}}/*
+            sudo cp -R ${{ env.Temp_path }}/. ${{ env.Location_path }}/
+            sudo chown -R www-data:www-data ${{ env.Location_path }}
+            sudo rm -rf ${{ env.Temp_path }}
             sudo nginx -s reload
