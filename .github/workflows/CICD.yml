@@ -1,0 +1,77 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  frontend:
+    name: Frontend CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Upload static export
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: out/
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy to EC2
+    needs: frontend
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download static export
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: out
+
+      - name: Upload static export
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "out/*"
+          target: "/tmp/todo-frontend-${{ github.sha }}"
+          strip_components: 1
+
+      - name: Activate deployment
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            sudo mkdir -p /var/www/html/todo-frontend
+            sudo find /var/www/html/todo-frontend -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            sudo cp -R /tmp/todo-frontend-${{ github.sha }}/. /var/www/html/todo-frontend/
+            sudo chown -R www-data:www-data /var/www/html/todo-frontend
+            rm -rf /tmp/todo-frontend-${{ github.sha }}
+            sudo nginx -s reload
