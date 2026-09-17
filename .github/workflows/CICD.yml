@@ -5,10 +5,6 @@ on:
     branches:
       - main
 
-  pull_request:
-    branches:
-      - main
-
 jobs:
   frontend:
     name: Frontend CI
@@ -56,7 +52,7 @@ jobs:
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
-          password: ${{ secrets.EC2_PASSWORD }}
+          key: ${{ secrets.EC2_SSH_KEY }}
           source: "out/*"
           target: "/tmp/todo-frontend-${{ github.sha }}"
           strip_components: 1
@@ -68,14 +64,19 @@ jobs:
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
-          password: ${{ secrets.EC2_PASSWORD }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: SUDO_PASSWORD
           timeout: 120s
           command_timeout: 10m
           script: |
             set -e
-            sudo mkdir -p /var/www/html/todo-frontend
-            sudo find /var/www/html/todo-frontend -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-            sudo cp -R /tmp/todo-frontend-${{ github.sha }}/. /var/www/html/todo-frontend/
-            sudo chown -R www-data:www-data /var/www/html/todo-frontend
-            rm -rf /tmp/todo-frontend-${{ github.sha }}
-            sudo nginx -s reload
+            printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' bash -c '
+              set -e
+              mkdir -p /var/www/html/todo-frontend
+              find /var/www/html/todo-frontend -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+              cp -R /tmp/todo-frontend-${{ github.sha }}/. /var/www/html/todo-frontend/
+              chown -R www-data:www-data /var/www/html/todo-frontend
+              rm -rf /tmp/todo-frontend-${{ github.sha }}
+              nginx -s reload
+          env:
+            SUDO_PASSWORD: ${{ secrets.EC2_PASSWORD }}
