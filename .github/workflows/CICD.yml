@@ -61,7 +61,7 @@ jobs:
           echo "$EC2_SSH_KEY" > key.pem
           chmod 600 key.pem
           scp -o StrictHostKeyChecking=no -i key.pem -r out/* \
-            "$EC2_USER@$EC2_HOST:${Temp_path}}"
+            "$EC2_USER@$EC2_HOST:${Temp_path}"
           rm -f key.pem
 
       - name: Activate deployment
