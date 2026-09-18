@@ -1,0 +1,34 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+
+env:
+  Location_path: /var/www/html/todo-frontend
+  Previous_path: /var/www/html/todo-frontend-previous
+
+jobs:
+  rollback:
+    name: Rollback frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Swap current and previous deployments
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 120s
+          command_timeout: 10m
+          script: |
+            set -e
+            if [ ! -d "${{ env.Previous_path }}" ]; then
+              echo "No previous deployment is available for rollback."
+              exit 1
+            fi
+            rm -rf "${{ env.Location_path }}-rollback-temp"
+            mv "${{ env.Location_path }}" "${{ env.Location_path }}-rollback-temp"
+            mv "${{ env.Previous_path }}" "${{ env.Location_path }}"
+            mv "${{ env.Location_path }}-rollback-temp" "${{ env.Previous_path }}"
+            nginx -s reload
