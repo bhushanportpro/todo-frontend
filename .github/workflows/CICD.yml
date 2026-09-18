@@ -6,9 +6,10 @@ on:
       - main
 
 ###
-      
+
 env:
   Location_path: /var/www/html/todo-frontend
+  Previous_path: /var/www/html/todo-frontend-previous
   Temp_path: /tmp/todo-frentend
 
 jobs:
@@ -61,8 +62,10 @@ jobs:
           set -e
           echo "$EC2_SSH_KEY" > key.pem
           chmod 600 key.pem
-          scp -o StrictHostKeyChecking=no -i key.pem -r out/* \
-            "$EC2_USER@$EC2_HOST:${Temp_path}"
+          ssh -o StrictHostKeyChecking=no -i key.pem \
+            "$EC2_USER@$EC2_HOST" "rm -rf '${Temp_path}' && mkdir -p '${Temp_path}'"
+          scp -o StrictHostKeyChecking=no -i key.pem -r out/. \
+            "$EC2_USER@$EC2_HOST:${Temp_path}/"
           rm -f key.pem
 
       - name: Activate deployment
@@ -75,8 +78,9 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
-            sudo rm -rf ${{env.Location_path}}/*
-            sudo cp -R ${{ env.Temp_path }}/. ${{ env.Location_path }}/
-            sudo chown -R www-data:www-data ${{ env.Location_path }}
-            sudo rm -rf ${{ env.Temp_path }}
-            sudo nginx -s reload
+            rm -rf "${{ env.Previous_path }}"
+            if [ -d "${{ env.Location_path }}" ]; then
+              mv "${{ env.Location_path }}" "${{ env.Previous_path }}"
+            fi
+            mv "${{ env.Temp_path }}" "${{ env.Location_path }}"
+            nginx -s reload
