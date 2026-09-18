@@ -78,8 +78,8 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
-            rm -rf "${{ env.Previous_path }}"
             if [ -d "${{ env.Location_path }}" ]; then
+              rm -rf "${{ env.Previous_path }}"
               mv "${{ env.Location_path }}" "${{ env.Previous_path }}"
             fi
             mv "${{ env.Temp_path }}" "${{ env.Location_path }}"
