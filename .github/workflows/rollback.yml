@@ -31,4 +31,3 @@ jobs:
             mv "${{ env.Location_path }}" "${{ env.Location_path }}-rollback-temp"
             mv "${{ env.Previous_path }}" "${{ env.Location_path }}"
             mv "${{ env.Location_path }}-rollback-temp" "${{ env.Previous_path }}"
-            nginx -s reload
