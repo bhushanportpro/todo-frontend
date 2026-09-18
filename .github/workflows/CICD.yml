@@ -9,7 +9,7 @@ env:
   EC2_USER: ${{ secrets.EC2_USER }}
   Location_path: /var/www/html/todo-frontend
   Previous_path: /var/www/html/todo-frontend-previous
-  Temp_path: /home/${{ env.EC2_USER }}/deploy-tmp/todo-frontend
+  Temp_path: /home/${{ secrets.EC2_USER }}/deploy-tmp/todo-frontend
 
 jobs:
   frontend:
