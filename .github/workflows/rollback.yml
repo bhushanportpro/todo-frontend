@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
 env:
-  Location_path: /var/www/html/todo-frontend
-  Previous_path: /var/www/html/todo-frontend-previous
+  LOCATION_PATH: /var/www/html/todo-frontend
+  PREVIOUS_PATH: /var/www/html/todo-frontend-previous
 
 jobs:
   rollback:
@@ -14,20 +14,24 @@ jobs:
 
     steps:
       - name: Swap current and previous deployments
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          timeout: 120s
-          command_timeout: 10m
-          script: |
-            set -e
-            if [ ! -d "${{ env.Previous_path }}" ]; then
-              echo "No previous deployment is available for rollback."
-              exit 1
-            fi
-            rm -rf "${{ env.Location_path }}-rollback-temp"
-            mv "${{ env.Location_path }}" "${{ env.Location_path }}-rollback-temp"
-            mv "${{ env.Previous_path }}" "${{ env.Location_path }}"
-            mv "${{ env.Location_path }}-rollback-temp" "${{ env.Previous_path }}"
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -e
+          printf '%s\n' "$EC2_SSH_KEY" > "$RUNNER_TEMP/key.pem"
+          chmod 600 "$RUNNER_TEMP/key.pem"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i "$RUNNER_TEMP/key.pem" "$EC2_USER@$EC2_HOST" "
+              set -e
+              if [ ! -d '$PREVIOUS_PATH' ]; then
+                echo 'No previous deployment is available for rollback.'
+                exit 1
+              fi
+              rm -rf '${LOCATION_PATH}-rollback-temp'
+              mv '$LOCATION_PATH' '${LOCATION_PATH}-rollback-temp'
+              mv '$PREVIOUS_PATH' '$LOCATION_PATH'
+              mv '${LOCATION_PATH}-rollback-temp' '$PREVIOUS_PATH'
+            "
+          rm -f "$RUNNER_TEMP/key.pem"

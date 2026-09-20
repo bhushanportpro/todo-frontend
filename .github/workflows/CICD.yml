@@ -4,80 +4,50 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 env:
-  EC2_USER: ${{ secrets.EC2_USER }}
-  Location_path: /var/www/html/todo-frontend
-  Previous_path: /var/www/html/todo-frontend-previous
-  Temp_path: /home/${{ secrets.EC2_USER }}/deploy-tmp/todo-frontend
+  LOCATION_PATH: /var/www/html/todo-frontend
+  PREVIOUS_PATH: /var/www/html/todo-frontend-previous
 
 jobs:
-  frontend:
-    name: Frontend CI
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build application
-        run: npm run build
-
-      - name: Upload static export
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-build
-          path: out/
-          if-no-files-found: error
-
   deploy:
-    name: Deploy to EC2
-    needs: frontend
+    name: Build and deploy frontend
     runs-on: ubuntu-latest
+    concurrency:
+      group: frontend-production
+      cancel-in-progress: false
 
     steps:
-      - name: Download static export
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-build
-          path: out
+      - name: Build and deploy
+        run: |
+          set -e
+          git -c http.extraheader="AUTHORIZATION: bearer $GITHUB_TOKEN" \
+            clone --depth 1 --branch "$GITHUB_REF_NAME" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
+          cd source
+          npm ci
+          npm run build
+          test -d out
 
-      - name: Upload static export
+          printf '%s\n' "$EC2_SSH_KEY" > "$RUNNER_TEMP/key.pem"
+          chmod 600 "$RUNNER_TEMP/key.pem"
+          SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $RUNNER_TEMP/key.pem"
+          SCP="scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $RUNNER_TEMP/key.pem"
+          TEMP_PATH="/tmp/todo-frontend-$GITHUB_SHA"
+
+          $SSH "$EC2_USER@$EC2_HOST" "rm -rf '$TEMP_PATH' && mkdir -p '$TEMP_PATH'"
+          $SCP -r out/. "$EC2_USER@$EC2_HOST:$TEMP_PATH/"
+          $SSH "$EC2_USER@$EC2_HOST" "
+            set -e
+            rm -rf '$PREVIOUS_PATH'
+            if [ -d '$LOCATION_PATH' ]; then
+              mv '$LOCATION_PATH' '$PREVIOUS_PATH'
+            fi
+            mv '$TEMP_PATH' '$LOCATION_PATH'
+          "
+          rm -f "$RUNNER_TEMP/key.pem"
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          set -e
-          echo "$EC2_SSH_KEY" > key.pem
-          chmod 600 key.pem
-          ssh -o StrictHostKeyChecking=no -i key.pem \
-            "$EC2_USER@$EC2_HOST" "rm -rf '${Temp_path}' && mkdir -p '${Temp_path}'"
-          scp -o StrictHostKeyChecking=no -i key.pem -r out/. \
-            "$EC2_USER@$EC2_HOST:${Temp_path}/"
-          rm -f key.pem
-
-      - name: Activate deployment
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          timeout: 120s
-          command_timeout: 10m
-          script: |
-            set -e
-            if [ -d "${{ env.Location_path }}" ]; then
-              rm -rf "${{ env.Previous_path }}"
-              mv "${{ env.Location_path }}" "${{ env.Previous_path }}"
-            fi
-            mv "${{ env.Temp_path }}" "${{ env.Location_path }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
