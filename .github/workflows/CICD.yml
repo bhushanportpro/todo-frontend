@@ -4,50 +4,134 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: frontend-production
+  cancel-in-progress: false
 
 env:
   LOCATION_PATH: /var/www/html/todo-frontend
   PREVIOUS_PATH: /var/www/html/todo-frontend-previous
+  NEW_PATH: /var/www/html/todo-frontend-new
 
 jobs:
-  deploy:
-    name: Build and deploy frontend
+  version:
+    name: Read version
     runs-on: ubuntu-latest
-    concurrency:
-      group: frontend-production
-      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
 
     steps:
-      - name: Build and deploy
+      - name: Get the code
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
+          git checkout "$GITHUB_SHA"
+
+      - name: Read version from package.json
+        id: read
+        run: |
+          set -euo pipefail
+
+          # Take the "version" field from package.json, for example 1.2.3
+          VERSION=$(jq -r .version package.json)
+
+          # It must look like MAJOR.MINOR.PATCH
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version in package.json must look like 1.2.3 but it is: $VERSION"
+            exit 1
+          fi
+
+          TAG="v$VERSION"
+          echo "Version is $VERSION, so the tag is $TAG"
+
+          # If this tag is already on GitHub, this version was released before.
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "Tag $TAG already exists."
+            echo "Change the version in package.json (for example to a higher number) and push again."
+            exit 1
+          fi
+
+          # Save the values so the other jobs can use them
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Build and deploy frontend
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+
+    steps:
+      - name: Get the code
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
+          git checkout "$GITHUB_SHA"
+
+      - name: Install dependencies and build
         run: |
           set -e
-          git -c http.extraheader="AUTHORIZATION: bearer $GITHUB_TOKEN" \
-            clone --depth 1 --branch "$GITHUB_REF_NAME" \
-            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" source
-          cd source
           npm ci
           npm run build
-          test -d out
 
-          printf '%s\n' "$EC2_SSH_KEY" > "$RUNNER_TEMP/key.pem"
-          chmod 600 "$RUNNER_TEMP/key.pem"
-          SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $RUNNER_TEMP/key.pem"
-          SCP="scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $RUNNER_TEMP/key.pem"
-          TEMP_PATH="/tmp/todo-frontend-$GITHUB_SHA"
+          # The build must create the "out" folder, if not something is wrong
+          if [ ! -d out ]; then
+            echo "The build did not create the out folder"
+            exit 1
+          fi
 
-          $SSH "$EC2_USER@$EC2_HOST" "rm -rf '$TEMP_PATH' && mkdir -p '$TEMP_PATH'"
-          $SCP -r out/. "$EC2_USER@$EC2_HOST:$TEMP_PATH/"
-          $SSH "$EC2_USER@$EC2_HOST" "
+          # Save the version inside the build, the rollback prints it later
+          echo "$VERSION" > out/.version
+
+      - name: Send files and deploy on EC2 (one SSH connection)
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -eo pipefail
+
+          # Save the SSH key in a file and lock it (ssh refuses keys that anyone can read)
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+          # ONE connection does everything:
+          #   "tar -czf - -C out ."  packs the build into one stream ("-" means "send to the pipe")
+          #   "|"                    hands that stream to ssh
+          #   on the server, "tar -xzf -" unpacks the stream into a new folder,
+          #   then the folders are swapped: current -> previous, new -> current.
+          # The variables (like $NEW_PATH) are filled in here on GitHub, then the finished
+          # commands are sent to the server.
+          tar -czf - -C out . | ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
             set -e
+            rm -rf '$NEW_PATH'
+            mkdir '$NEW_PATH'
+            tar -xzf - -C '$NEW_PATH'
             rm -rf '$PREVIOUS_PATH'
             if [ -d '$LOCATION_PATH' ]; then
               mv '$LOCATION_PATH' '$PREVIOUS_PATH'
             fi
-            mv '$TEMP_PATH' '$LOCATION_PATH'
+            mv '$NEW_PATH' '$LOCATION_PATH'
+            echo 'Deployed frontend version $VERSION'
           "
-          rm -f "$RUNNER_TEMP/key.pem"
+
+  release:
+    name: Create tag and release
+    needs: [version, deploy]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create tag and GitHub release
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
