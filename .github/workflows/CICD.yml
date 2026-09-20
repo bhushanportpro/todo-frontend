@@ -94,7 +94,6 @@ jobs:
       - name: Send files and deploy on EC2 (one SSH connection)
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           set -eo pipefail
