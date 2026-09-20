@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -97,6 +98,12 @@ jobs:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           set -eo pipefail
+
+          # Stop early with a clear message if a secret is empty or missing.
+          # (Without this check, an empty secret gives a confusing "usage: ssh" error.)
+          if [ -z "$EC2_HOST" ]; then echo "Secret EC2_HOST is empty or missing in this repo"; exit 1; fi
+          if [ -z "$EC2_USER" ]; then echo "Secret EC2_USER is empty or missing in this repo"; exit 1; fi
+          if [ -z "$EC2_SSH_KEY" ]; then echo "Secret EC2_SSH_KEY is empty or missing in this repo"; exit 1; fi
 
           # Save the SSH key in a file and lock it (ssh refuses keys that anyone can read)
           mkdir -p ~/.ssh
