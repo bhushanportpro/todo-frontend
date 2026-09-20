@@ -6,6 +6,7 @@ on:
 env:
   LOCATION_PATH: /var/www/html/todo-frontend
   PREVIOUS_PATH: /var/www/html/todo-frontend-previous
+  SWAP_PATH: /var/www/html/todo-frontend-rollback-temp
 
 jobs:
   rollback:
@@ -13,25 +14,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Swap current and previous deployments
+      - name: Swap current and previous folders on EC2 (one SSH connection)
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           set -e
-          printf '%s\n' "$EC2_SSH_KEY" > "$RUNNER_TEMP/key.pem"
-          chmod 600 "$RUNNER_TEMP/key.pem"
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i "$RUNNER_TEMP/key.pem" "$EC2_USER@$EC2_HOST" "
-              set -e
-              if [ ! -d '$PREVIOUS_PATH' ]; then
-                echo 'No previous deployment is available for rollback.'
-                exit 1
-              fi
-              rm -rf '${LOCATION_PATH}-rollback-temp'
-              mv '$LOCATION_PATH' '${LOCATION_PATH}-rollback-temp'
-              mv '$PREVIOUS_PATH' '$LOCATION_PATH'
-              mv '${LOCATION_PATH}-rollback-temp' '$PREVIOUS_PATH'
-            "
-          rm -f "$RUNNER_TEMP/key.pem"
+
+          # Save the SSH key in a file and lock it
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+          # ONE connection: everything between the double quotes runs on the EC2 server.
+          # The swap uses a temporary third folder, like swapping two cups using a third cup.
+          ssh -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
+            set -e
+            if [ ! -d '$PREVIOUS_PATH' ]; then
+              echo 'No previous deployment is available for rollback.'
+              exit 1
+            fi
+
+            echo 'Version online now (will be moved away):'
+            cat '$LOCATION_PATH/.version' 2>/dev/null || echo unknown
+            echo 'Version coming back:'
+            cat '$PREVIOUS_PATH/.version' 2>/dev/null || echo unknown
+
+            rm -rf '$SWAP_PATH'
+            mv '$LOCATION_PATH' '$SWAP_PATH'
+            mv '$PREVIOUS_PATH' '$LOCATION_PATH'
+            mv '$SWAP_PATH' '$PREVIOUS_PATH'
+
+            echo 'Rollback done. Version online now:'
+            cat '$LOCATION_PATH/.version' 2>/dev/null || echo unknown
+          "
